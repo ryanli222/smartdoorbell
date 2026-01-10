@@ -156,6 +156,7 @@ def run_motion_triggered_display(
     Run motion-triggered camera display.
     
     Shows clean camera feed when motion is detected.
+    Uses a SINGLE camera shared between motion detection and display.
     
     Args:
         sensitivity: Motion detection sensitivity (lower = more sensitive)
@@ -168,41 +169,89 @@ def run_motion_triggered_display(
     print("=" * 60)
     print()
     
-    # Create display
-    display = LiveCameraDisplay(
-        display_duration_sec=display_duration,
-        audio_file=audio_file or config.ALERT_AUDIO_FILE
-    )
+    # Open camera ONCE
+    print("[Setup] Opening camera...")
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        # Try camera 1
+        cap = cv2.VideoCapture(1)
+        if not cap.isOpened():
+            print("[ERROR] Could not open camera!")
+            return
     
-    # Create motion detector with trigger callback
-    def on_motion():
-        print("[Motion] Detected! Showing camera...")
-        display.trigger()
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    print(f"[Setup] Camera opened: {int(cap.get(3))}x{int(cap.get(4))}")
     
-    detector = CameraMotionDetector(
-        callback=on_motion,
-        sensitivity=sensitivity,
-        min_area=min_area,
-        cooldown_sec=2.0
-    )
+    # State variables
+    show_until = 0
+    prev_frame = None
+    motion_count = 0
+    audio = audio_file or config.ALERT_AUDIO_FILE
     
-    print(f"[Setup] Audio file: {audio_file or config.ALERT_AUDIO_FILE or 'None'}")
+    print(f"[Setup] Audio file: {audio or 'None'}")
     print(f"[Setup] Display duration: {display_duration}s")
     print(f"[Setup] Sensitivity: {sensitivity}")
     print()
-    
-    # Start motion detection in background
-    detector.start(show_preview=False)
-    
-    print("[Ready] Watching for motion...")
-    print("[Ready] Press 'q' in popup window to quit")
+    print("[Ready] Watching for motion... Press 'q' to quit")
     print()
     
+    window_open = False
+    
     try:
-        display.run_display_loop()
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.1)
+                continue
+            
+            # Motion detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (21, 21), 0)
+            
+            if prev_frame is not None:
+                diff = cv2.absdiff(prev_frame, gray)
+                thresh = cv2.threshold(diff, sensitivity, 255, cv2.THRESH_BINARY)[1]
+                thresh = cv2.dilate(thresh, None, iterations=2)
+                contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                for contour in contours:
+                    if cv2.contourArea(contour) > min_area:
+                        motion_count += 1
+                        show_until = time.time() + display_duration
+                        print(f"[Motion #{motion_count}] Detected!")
+                        if audio:
+                            play_audio(audio)
+                        break
+            
+            prev_frame = gray
+            
+            # Display logic
+            current_time = time.time()
+            if current_time < show_until:
+                if not window_open:
+                    cv2.namedWindow("Doorbell Camera", cv2.WINDOW_NORMAL)
+                    window_open = True
+                
+                # Draw LIVE indicator
+                h, w = frame.shape[:2]
+                cv2.circle(frame, (w - 80, 30), 8, (0, 0, 255), -1)
+                cv2.putText(frame, "LIVE", (w - 65, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                cv2.imshow("Doorbell Camera", frame)
+            else:
+                if window_open:
+                    cv2.destroyWindow("Doorbell Camera")
+                    window_open = False
+            
+            key = cv2.waitKey(30) & 0xFF
+            if key == ord('q'):
+                break
+    
     finally:
-        detector.stop()
-        print("[Done] Stopped")
+        cap.release()
+        cv2.destroyAllWindows()
+        print(f"\n[Done] Total motion events: {motion_count}")
 
 
 if __name__ == "__main__":
