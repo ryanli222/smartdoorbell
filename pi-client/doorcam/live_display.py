@@ -13,6 +13,7 @@ from . import config
 from .camera_manager import CameraManager
 from .camera_motion import CameraMotionDetector
 from .audio import play_audio
+from .audio_relay import AudioRelay
 
 
 class LiveCameraDisplay:
@@ -195,6 +196,9 @@ def run_motion_triggered_display(
     motion_count = 0
     audio = audio_file or config.ALERT_AUDIO_FILE
     
+    # Audio relay for live mic passthrough
+    audio_relay = AudioRelay()
+    
     print(f"[Setup] Backend: {backend}")
     print(f"[Setup] Display duration: {display_duration}s (hard close)")
     print(f"[Setup] Snapshot at: {snapshot_delay}s after motion")
@@ -298,6 +302,8 @@ def run_motion_triggered_display(
                         print(f"[Motion #{motion_count}] Detected! Window opens for {display_duration}s")
                         if audio:
                             play_audio(audio)
+                        # Start audio relay (mic -> speakers)
+                        audio_relay.start()
                         break
             
             prev_frame = gray
@@ -331,6 +337,8 @@ def run_motion_triggered_display(
                     cv2.destroyWindow("Doorbell Camera")
                     window_open = False
                     print(f"[Session] Window closed after {display_duration}s")
+                # Stop audio relay
+                audio_relay.stop()
                 in_motion_session = False
                 motion_start_time = 0
             
@@ -345,6 +353,7 @@ def run_motion_triggered_display(
                     window_open = True
     
     finally:
+        audio_relay.stop()  # Stop audio relay if running
         cap.release()
         cv2.destroyAllWindows()
         print(f"\n[Done] Total motion events: {motion_count}")
