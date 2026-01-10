@@ -190,6 +190,7 @@ def run_motion_triggered_display(
     snapshot_at = 0
     snapshot_taken = False
     in_motion_session = False  # Track if we're in a motion session
+    pause_until = 0  # When to resume detection
     prev_frame = None
     motion_count = 0
     audio = audio_file or config.ALERT_AUDIO_FILE
@@ -199,7 +200,8 @@ def run_motion_triggered_display(
     print(f"[Setup] Snapshot at: {snapshot_delay}s after motion")
     print(f"[Setup] Audio file: {audio or 'None'}")
     print()
-    print("[Ready] Watching for motion... Press 'q' to quit")
+    print("[Ready] Watching for motion...")
+    print("[Keys] 'q' = quit, 'f' = pause for 1 minute")
     print()
     
     window_open = False
@@ -252,6 +254,25 @@ def run_motion_triggered_display(
                 continue
             
             current_time = time.time()
+            
+            # Check if paused
+            is_paused = current_time < pause_until
+            if is_paused:
+                pause_remaining = int(pause_until - current_time)
+                # Show pause status
+                h, w = frame.shape[:2]
+                cv2.putText(frame, f"PAUSED ({pause_remaining}s)", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                cv2.imshow("Doorbell Camera", frame)
+                
+                key = cv2.waitKey(30) & 0xFF
+                if key == ord('q'):
+                    break
+                elif key == ord('f'):
+                    # Cancel pause
+                    pause_until = 0
+                    print("[Pause] Cancelled - detection resumed")
+                continue
             
             # Calculate time since motion started
             time_since_motion = current_time - motion_start_time if motion_start_time > 0 else 0
@@ -315,6 +336,12 @@ def run_motion_triggered_display(
             key = cv2.waitKey(30) & 0xFF
             if key == ord('q'):
                 break
+            elif key == ord('f'):
+                pause_until = current_time + 60
+                print("[Pause] Detection paused for 60 seconds (press 'f' again to cancel)")
+                if not window_open:
+                    cv2.namedWindow("Doorbell Camera", cv2.WINDOW_NORMAL)
+                    window_open = True
     
     finally:
         cap.release()
