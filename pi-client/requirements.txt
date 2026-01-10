@@ -1,0 +1,10 @@
+# Pi Client Dependencies
+
+# Core
+opencv-python>=4.8.0
+
+# GPIO (only needed on Raspberry Pi)
+# RPi.GPIO>=0.7.1
+
+# Optional: For better camera handling on some systems
+# opencv-python-headless>=4.8.0  # Use this instead if no display needed
