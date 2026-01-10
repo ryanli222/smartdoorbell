@@ -311,7 +311,8 @@ def run_motion_triggered_display(
             # Display logic
             if in_motion_session and not session_should_end:
                 if not window_open:
-                    cv2.namedWindow("Doorbell Camera", cv2.WINDOW_NORMAL)
+                    cv2.namedWindow("Doorbell Camera", cv2.WND_PROP_FULLSCREEN)
+                    cv2.setWindowProperty("Doorbell Camera", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
                     window_open = True
                 
                 # Draw LIVE indicator
