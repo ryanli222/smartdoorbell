@@ -38,6 +38,24 @@ python -m doorcam.motion_sensor
 - Type `stats` to see detection statistics
 - Type `quit` to exit
 
+### 4. Motion-Triggered Live Display ⭐
+
+Run camera that pops up when motion is detected:
+
+```bash
+python -m doorcam.live_display
+```
+
+**With audio alert:**
+```bash
+python -m doorcam.live_display --audio alerts/doorbell.wav
+```
+
+**Options:**
+- `--audio <path>` - Audio file to play on motion
+- `--duration <sec>` - How long to show camera (default: 10)
+- `--sensitivity <val>` - Motion sensitivity (lower = more sensitive)
+
 ## Configuration
 
 Set environment variables to customize behavior:
@@ -52,6 +70,8 @@ Set environment variables to customize behavior:
 | `CAMERA_WIDTH` | `1280` | Capture width |
 | `CAMERA_HEIGHT` | `720` | Capture height |
 | `CAMERA_FPS` | `30` | Target framerate |
+| `ALERT_AUDIO_FILE` | (none) | Audio file to play on motion |
+
 
 ## On Raspberry Pi
 

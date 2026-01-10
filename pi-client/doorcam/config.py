@@ -14,5 +14,9 @@ CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "1080"))
 CAMERA_FPS = int(os.getenv("CAMERA_FPS", "30"))
 CAMERA_WARMUP_FRAMES = int(os.getenv("CAMERA_WARMUP_FRAMES", "10"))
 
+# Audio Configuration - path to audio file to play on motion detection
+ALERT_AUDIO_FILE = os.getenv("ALERT_AUDIO_FILE", "")  # e.g., "alerts/doorbell.wav"
+
 # Mock mode for development (no real GPIO/camera)
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
+
