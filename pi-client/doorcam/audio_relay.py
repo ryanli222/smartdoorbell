@@ -2,129 +2,166 @@
 Audio Relay Module
 
 Captures audio from microphone and plays it through speakers in real-time.
-Used for live audio monitoring during motion events.
+Uses subprocess with arecord/aplay for better Raspberry Pi compatibility.
 """
 
+import subprocess
 import threading
 import time
+import platform
 
 
 class AudioRelay:
     """
     Real-time audio passthrough from microphone to speakers.
     
-    Uses PyAudio for cross-platform audio streaming.
+    Uses arecord/aplay on Linux (Pi) for reliable webcam mic support.
+    Falls back to PyAudio on Windows/Mac.
     """
     
-    def __init__(self, device_index: int = None, chunk_size: int = 1024, sample_rate: int = 44100):
+    def __init__(self, device: str = None):
         """
         Initialize audio relay.
         
         Args:
-            device_index: Input device index (None = default microphone)
-            chunk_size: Audio buffer size
-            sample_rate: Sample rate in Hz
+            device: ALSA device name (e.g., "plughw:JVCU100,0") or None for auto-detect
         """
-        self.device_index = device_index
-        self.chunk_size = chunk_size
-        self.sample_rate = sample_rate
-        
+        self.device = device
         self._running = False
+        self._process = None
         self._thread = None
-        self._pyaudio = None
-        self._stream_in = None
-        self._stream_out = None
     
-    def _relay_loop(self):
-        """Main audio relay loop."""
+    def _find_webcam_device(self) -> str:
+        """Find the webcam audio device."""
         try:
-            import pyaudio
-            
-            self._pyaudio = pyaudio.PyAudio()
-            
-            # Find the webcam microphone if device_index not specified
-            input_device = self.device_index
-            if input_device is None:
-                # List audio devices and try to find webcam
-                for i in range(self._pyaudio.get_device_count()):
-                    info = self._pyaudio.get_device_info_by_index(i)
-                    if info['maxInputChannels'] > 0:
-                        name = info['name'].lower()
-                        # Prefer USB/webcam devices
-                        if 'usb' in name or 'webcam' in name or 'camera' in name:
-                            input_device = i
-                            print(f"[AudioRelay] Using input: {info['name']}")
-                            break
-                
-                # Fallback to default
-                if input_device is None:
-                    input_device = self._pyaudio.get_default_input_device_info()['index']
-                    print(f"[AudioRelay] Using default input device")
-            
-            # Open input stream (microphone)
-            self._stream_in = self._pyaudio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.sample_rate,
-                input=True,
-                input_device_index=input_device,
-                frames_per_buffer=self.chunk_size
+            result = subprocess.run(
+                ["arecord", "-l"],
+                capture_output=True,
+                text=True
             )
             
-            # Open output stream (speakers)
-            self._stream_out = self._pyaudio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.sample_rate,
-                output=True,
-                frames_per_buffer=self.chunk_size
+            # Parse output for webcam/USB device
+            for line in result.stdout.split('\n'):
+                if 'card' in line.lower():
+                    # Extract card name
+                    if 'usb' in line.lower() or 'webcam' in line.lower() or 'jvcu' in line.lower():
+                        # Extract card number or name
+                        parts = line.split(':')
+                        if len(parts) >= 2:
+                            card_part = parts[0]
+                            card_num = ''.join(filter(str.isdigit, card_part))
+                            if card_num:
+                                return f"plughw:{card_num},0"
+            
+            # Default fallback
+            return "plughw:1,0"
+        except:
+            return "plughw:1,0"
+    
+    def _relay_loop_linux(self):
+        """Audio relay using arecord | aplay (Linux/Pi)."""
+        device = self.device or self._find_webcam_device()
+        
+        print(f"[AudioRelay] Starting with device: {device}")
+        
+        try:
+            # Use arecord piped to aplay for real-time relay
+            # -D = device, -f cd = CD quality, -t raw = raw format
+            self._process = subprocess.Popen(
+                f"arecord -D {device} -f cd -t raw 2>/dev/null | aplay -f cd -t raw 2>/dev/null",
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
             )
             
             print("[AudioRelay] Started - mic → speakers")
             
-            # Relay loop
+            # Wait for process or stop signal
             while self._running:
-                try:
-                    # Read from mic
-                    data = self._stream_in.read(self.chunk_size, exception_on_overflow=False)
-                    # Write to speakers
-                    self._stream_out.write(data)
-                except Exception as e:
+                if self._process.poll() is not None:
+                    # Process ended unexpectedly
                     if self._running:
-                        print(f"[AudioRelay] Stream error: {e}")
-                    break
-            
-        except ImportError:
-            print("[AudioRelay] PyAudio not installed. Run: pip install pyaudio")
+                        print("[AudioRelay] Process ended, restarting...")
+                        time.sleep(0.5)
+                        self._process = subprocess.Popen(
+                            f"arecord -D {device} -f cd -t raw 2>/dev/null | aplay -f cd -t raw 2>/dev/null",
+                            shell=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                time.sleep(0.1)
+                
         except Exception as e:
             print(f"[AudioRelay] Error: {e}")
         finally:
             self._cleanup()
     
+    def _relay_loop_pyaudio(self):
+        """Audio relay using PyAudio (Windows/Mac)."""
+        try:
+            import pyaudio
+            
+            p = pyaudio.PyAudio()
+            
+            # Find input device
+            input_device = None
+            for i in range(p.get_device_count()):
+                info = p.get_device_info_by_index(i)
+                if info['maxInputChannels'] > 0:
+                    name = info['name'].lower()
+                    if 'usb' in name or 'webcam' in name or 'camera' in name:
+                        input_device = i
+                        print(f"[AudioRelay] Using: {info['name']}")
+                        break
+            
+            # Open streams
+            stream_in = p.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=44100,
+                input=True,
+                input_device_index=input_device,
+                frames_per_buffer=1024
+            )
+            
+            stream_out = p.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=44100,
+                output=True,
+                frames_per_buffer=1024
+            )
+            
+            print("[AudioRelay] Started - mic → speakers")
+            
+            while self._running:
+                try:
+                    data = stream_in.read(1024, exception_on_overflow=False)
+                    stream_out.write(data)
+                except:
+                    break
+            
+            stream_in.close()
+            stream_out.close()
+            p.terminate()
+            
+        except ImportError:
+            print("[AudioRelay] PyAudio not available")
+        except Exception as e:
+            print(f"[AudioRelay] Error: {e}")
+    
     def _cleanup(self):
-        """Clean up audio streams."""
-        if self._stream_in:
+        """Clean up processes."""
+        if self._process:
             try:
-                self._stream_in.stop_stream()
-                self._stream_in.close()
+                self._process.terminate()
+                self._process.wait(timeout=1)
             except:
-                pass
-            self._stream_in = None
-        
-        if self._stream_out:
-            try:
-                self._stream_out.stop_stream()
-                self._stream_out.close()
-            except:
-                pass
-            self._stream_out = None
-        
-        if self._pyaudio:
-            try:
-                self._pyaudio.terminate()
-            except:
-                pass
-            self._pyaudio = None
+                try:
+                    self._process.kill()
+                except:
+                    pass
+            self._process = None
     
     def start(self):
         """Start audio relay in background thread."""
@@ -132,7 +169,14 @@ class AudioRelay:
             return
         
         self._running = True
-        self._thread = threading.Thread(target=self._relay_loop, daemon=True)
+        
+        # Choose method based on platform
+        if platform.system() == "Linux":
+            target = self._relay_loop_linux
+        else:
+            target = self._relay_loop_pyaudio
+        
+        self._thread = threading.Thread(target=target, daemon=True)
         self._thread.start()
     
     def stop(self):
@@ -142,12 +186,12 @@ class AudioRelay:
         
         print("[AudioRelay] Stopping...")
         self._running = False
+        self._cleanup()
         
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
         
-        self._cleanup()
         print("[AudioRelay] Stopped")
     
     def is_running(self) -> bool:
@@ -155,17 +199,15 @@ class AudioRelay:
         return self._running
 
 
-# Global instance for easy access
+# Convenience functions
 _relay = None
 
-
-def start_audio_relay():
+def start_audio_relay(device: str = None):
     """Start the global audio relay."""
     global _relay
     if _relay is None:
-        _relay = AudioRelay()
+        _relay = AudioRelay(device=device)
     _relay.start()
-
 
 def stop_audio_relay():
     """Stop the global audio relay."""
@@ -175,15 +217,26 @@ def stop_audio_relay():
 
 
 if __name__ == "__main__":
+    import sys
+    
     print("=" * 50)
     print("Audio Relay Test")
     print("=" * 50)
     print()
-    print("This will relay audio from your microphone to speakers.")
+    
+    # Allow specifying device on command line
+    device = sys.argv[1] if len(sys.argv) > 1 else None
+    
+    if device:
+        print(f"Using device: {device}")
+    else:
+        print("Auto-detecting webcam device...")
+    print()
+    print("Speak into your webcam mic - you should hear yourself!")
     print("Press Ctrl+C to stop.")
     print()
     
-    relay = AudioRelay()
+    relay = AudioRelay(device=device)
     relay.start()
     
     try:
