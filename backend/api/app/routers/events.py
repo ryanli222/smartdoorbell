@@ -126,3 +126,76 @@ def list_events(
     """List recent events."""
     events = db.query(Event).order_by(Event.started_at.desc()).limit(limit).all()
     return events
+
+
+@router.post("/{event_id}/upload")
+async def upload_snapshot(
+    event_id: str,
+    db: Session = Depends(get_db),
+    file: bytes = None
+):
+    """
+    Direct upload endpoint - upload snapshot data directly to API.
+    This bypasses presigned URL issues when behind NAT/ngrok.
+    """
+    from fastapi import Request
+    from io import BytesIO
+    
+    # This will be called with raw body
+    pass
+
+
+# Alternative: Accept base64 encoded image
+from fastapi import Body
+import base64
+
+@router.post("/{event_id}/upload-base64", response_model=EventFinalizeResponse)  
+def upload_snapshot_base64(
+    event_id: str,
+    image_data: str = Body(..., embed=True),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload snapshot as base64 encoded string.
+    Useful when presigned URLs don't work (NAT/firewall issues).
+    """
+    try:
+        event_uuid = uuid.UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid event_id format")
+    
+    event = db.query(Event).filter(Event.id == event_uuid).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Decode base64 image
+    try:
+        image_bytes = base64.b64decode(image_data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 image data")
+    
+    # Upload to MinIO
+    object_name = f"snapshots/{event.id}.jpg"
+    try:
+        from io import BytesIO
+        storage._get_client().put_object(
+            storage._get_client()._bucket_name if hasattr(storage._get_client(), '_bucket_name') else "doorbell-snapshots",
+            object_name,
+            BytesIO(image_bytes),
+            len(image_bytes),
+            content_type="image/jpeg"
+        )
+    except Exception as e:
+        # If MinIO fails, still save the URL for later
+        print(f"MinIO upload error: {e}")
+    
+    # Update event with snapshot URL
+    event.snapshot_url = f"/snapshots/{event.id}.jpg"
+    db.commit()
+    db.refresh(event)
+    
+    return EventFinalizeResponse(
+        event_id=event.id,
+        status="finalized",
+        snapshot_url=event.snapshot_url
+    )

@@ -2,6 +2,7 @@
 Smart Doorbell - Pi Client Main Application
 
 Detects motion via camera, captures snapshot, uploads to backend.
+Uses base64 upload to avoid presigned URL issues with NAT/ngrok.
 """
 
 import os
@@ -9,6 +10,7 @@ import sys
 import time
 import uuid
 import cv2
+import base64
 import requests
 from datetime import datetime
 from doorcam.camera_motion import CameraMotionDetector
@@ -35,7 +37,7 @@ class DoorbellClient:
         if self._detector and self._detector._cap:
             ret, frame = self._detector._cap.read()
             if ret:
-                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 return jpeg.tobytes()
         return None
     
@@ -46,93 +48,60 @@ class DoorbellClient:
         print(f"[Event #{self.event_count}] Motion detected at {datetime.now().isoformat()}")
         
         # Capture snapshot from the same camera
-        print("[1/4] Capturing snapshot...")
+        print("[1/3] Capturing snapshot...")
         snapshot_data = self.capture_from_detector()
         if not snapshot_data:
             print("ERROR: Failed to capture snapshot")
             return
         print(f"      Captured {len(snapshot_data)} bytes")
         
-        # Start event with backend
-        print("[2/4] Starting event with backend...")
-        event_data = self.start_event()
-        if not event_data:
-            print("ERROR: Failed to start event - saving locally")
+        # Start event with backend  
+        print("[2/3] Creating event...")
+        event_id = self.create_event()
+        if not event_id:
+            print("ERROR: Failed to create event - saving locally")
             self.save_locally(snapshot_data)
             return
-        
-        event_id = event_data.get("event_id")
-        upload_url = event_data.get("upload_url")
-        object_key = event_data.get("object_key")
         print(f"      Event ID: {event_id}")
         
-        # Upload snapshot to MinIO
-        print("[3/4] Uploading snapshot...")
-        if not self.upload_snapshot(upload_url, snapshot_data):
-            print("ERROR: Failed to upload snapshot")
-            self.save_locally(snapshot_data, event_id)
-            return
-        print("      Upload complete!")
-        
-        # Finalize event
-        print("[4/4] Finalizing event...")
-        if self.finalize_event(event_id, object_key):
-            print("      Event finalized successfully!")
+        # Upload snapshot via base64
+        print("[3/3] Uploading snapshot...")
+        if self.upload_base64(event_id, snapshot_data):
+            print("      Upload complete!")
         else:
-            print("ERROR: Failed to finalize event")
+            print("ERROR: Failed to upload - saving locally")
+            self.save_locally(snapshot_data, event_id)
         
         print(f"{'='*50}\n")
     
-    def start_event(self) -> dict:
-        """Start a new event with the backend."""
+    def create_event(self) -> str:
+        """Create a new event and return event_id."""
         try:
             response = requests.post(
                 f"{self.backend_url}/v1/events/start",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "device_id": self.device_id,
-                    "started_at": datetime.utcnow().isoformat() + "Z"
-                },
+                headers={"Content-Type": "application/json"},
                 timeout=10
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            return str(data.get("event_id"))
         except Exception as e:
             print(f"      Error: {e}")
             return None
     
-    def upload_snapshot(self, upload_url: str, data: bytes) -> bool:
-        """Upload snapshot to presigned URL."""
+    def upload_base64(self, event_id: str, data: bytes) -> bool:
+        """Upload snapshot as base64 to bypass presigned URL issues."""
         try:
-            response = requests.put(
-                upload_url,
-                data=data,
-                headers={"Content-Type": "image/jpeg"},
-                timeout=30
-            )
-            return response.status_code in [200, 201]
-        except Exception as e:
-            print(f"      Upload error: {e}")
-            return False
-    
-    def finalize_event(self, event_id: str, object_key: str) -> bool:
-        """Finalize the event with the backend."""
-        try:
+            b64_data = base64.b64encode(data).decode('utf-8')
             response = requests.post(
-                f"{self.backend_url}/v1/events/{event_id}/finalize",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={"snapshot_object_key": object_key},
-                timeout=10
+                f"{self.backend_url}/v1/events/{event_id}/upload-base64",
+                headers={"Content-Type": "application/json"},
+                json={"image_data": b64_data},
+                timeout=30
             )
             return response.status_code == 200
         except Exception as e:
-            print(f"      Finalize error: {e}")
+            print(f"      Upload error: {e}")
             return False
     
     def save_locally(self, data: bytes, event_id: str = None):
