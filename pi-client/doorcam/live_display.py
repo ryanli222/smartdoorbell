@@ -315,10 +315,11 @@ def run_motion_triggered_display(
                         print(f"[Motion #{motion_count}] Detected! Window opens for {display_duration}s")
                         if audio:
                             play_audio(audio)
-                            # Wait for alert to finish before starting mic relay
+                        # Start audio relay after 5s delay (in background so camera doesn't freeze)
+                        def start_relay_delayed():
                             time.sleep(5.0)
-                        # Start audio relay (mic -> speakers)
-                        audio_relay.start()
+                            audio_relay.start()
+                        threading.Thread(target=start_relay_delayed, daemon=True).start()
                         break
             
             prev_frame = gray
