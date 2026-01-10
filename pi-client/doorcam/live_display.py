@@ -159,14 +159,7 @@ def run_motion_triggered_display(
     
     Shows clean camera feed when motion is detected.
     Uploads a snapshot to the backend 3 seconds after motion.
-    
-    Args:
-        sensitivity: Motion detection sensitivity (lower = more sensitive)
-        min_area: Minimum motion area to trigger
-        display_duration: How long to show camera after motion (default 15s)
-        snapshot_delay: When to capture snapshot after motion (default 3s)
-        audio_file: Path to audio file to play on motion
-        backend_url: Backend URL for uploading snapshots
+    Window closes after exactly 15 seconds (hard timer).
     """
     import os
     import base64
@@ -193,15 +186,16 @@ def run_motion_triggered_display(
     print(f"[Setup] Camera opened: {int(cap.get(3))}x{int(cap.get(4))}")
     
     # State variables
-    show_until = 0
+    motion_start_time = 0  # When motion started (for hard 15s timer)
     snapshot_at = 0
     snapshot_taken = False
+    in_motion_session = False  # Track if we're in a motion session
     prev_frame = None
     motion_count = 0
     audio = audio_file or config.ALERT_AUDIO_FILE
     
     print(f"[Setup] Backend: {backend}")
-    print(f"[Setup] Display duration: {display_duration}s")
+    print(f"[Setup] Display duration: {display_duration}s (hard close)")
     print(f"[Setup] Snapshot at: {snapshot_delay}s after motion")
     print(f"[Setup] Audio file: {audio or 'None'}")
     print()
@@ -217,10 +211,20 @@ def run_motion_triggered_display(
             _, jpeg = cv2.imencode('.jpg', frame_data, [cv2.IMWRITE_JPEG_QUALITY, 85])
             b64_data = base64.b64encode(jpeg.tobytes()).decode('utf-8')
             
+            # Headers to bypass ngrok warning page
+            headers = {
+                "Content-Type": "application/json",
+                "ngrok-skip-browser-warning": "true"
+            }
+            
             # Create event
-            resp = requests.post(f"{backend}/v1/events/start", timeout=10)
+            resp = requests.post(
+                f"{backend}/v1/events/start",
+                headers=headers,
+                timeout=10
+            )
             if resp.status_code != 200:
-                print(f"[Upload] Failed to create event: {resp.status_code}")
+                print(f"[Upload] Failed to create event: {resp.status_code} - {resp.text[:100]}")
                 return
             
             event_id = resp.json().get("event_id")
@@ -230,7 +234,7 @@ def run_motion_triggered_display(
             resp = requests.post(
                 f"{backend}/v1/events/{event_id}/upload-base64",
                 json={"image_data": b64_data},
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=30
             )
             if resp.status_code == 200:
@@ -249,11 +253,15 @@ def run_motion_triggered_display(
             
             current_time = time.time()
             
-            # Motion detection
+            # Calculate time since motion started
+            time_since_motion = current_time - motion_start_time if motion_start_time > 0 else 0
+            session_should_end = in_motion_session and time_since_motion >= display_duration
+            
+            # Motion detection (only when not in a session)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
             
-            if prev_frame is not None:
+            if prev_frame is not None and not in_motion_session:
                 diff = cv2.absdiff(prev_frame, gray)
                 thresh = cv2.threshold(diff, sensitivity, 255, cv2.THRESH_BINARY)[1]
                 thresh = cv2.dilate(thresh, None, iterations=2)
@@ -262,10 +270,11 @@ def run_motion_triggered_display(
                 for contour in contours:
                     if cv2.contourArea(contour) > min_area:
                         motion_count += 1
-                        show_until = current_time + display_duration
+                        motion_start_time = current_time
                         snapshot_at = current_time + snapshot_delay
                         snapshot_taken = False
-                        print(f"[Motion #{motion_count}] Detected!")
+                        in_motion_session = True
+                        print(f"[Motion #{motion_count}] Detected! Window opens for {display_duration}s")
                         if audio:
                             play_audio(audio)
                         break
@@ -273,14 +282,13 @@ def run_motion_triggered_display(
             prev_frame = gray
             
             # Snapshot capture (3 seconds after motion)
-            if not snapshot_taken and snapshot_at > 0 and current_time >= snapshot_at and current_time < show_until:
+            if in_motion_session and not snapshot_taken and current_time >= snapshot_at:
                 snapshot_taken = True
                 print("[Capture] Taking snapshot...")
-                # Upload in background to avoid blocking
                 threading.Thread(target=upload_snapshot, args=(frame.copy(),), daemon=True).start()
             
             # Display logic
-            if current_time < show_until:
+            if in_motion_session and not session_should_end:
                 if not window_open:
                     cv2.namedWindow("Doorbell Camera", cv2.WINDOW_NORMAL)
                     window_open = True
@@ -291,14 +299,18 @@ def run_motion_triggered_display(
                 cv2.putText(frame, "LIVE", (w - 65, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
                 # Show time remaining
-                remaining = int(show_until - current_time)
+                remaining = int(display_duration - time_since_motion)
                 cv2.putText(frame, f"{remaining}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 
                 cv2.imshow("Doorbell Camera", frame)
-            else:
+            elif session_should_end:
+                # Hard close after 15 seconds
                 if window_open:
                     cv2.destroyWindow("Doorbell Camera")
                     window_open = False
+                    print(f"[Session] Window closed after {display_duration}s")
+                in_motion_session = False
+                motion_start_time = 0
             
             key = cv2.waitKey(30) & 0xFF
             if key == ord('q'):
