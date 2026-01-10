@@ -149,21 +149,31 @@ class LiveCameraDisplay:
 def run_motion_triggered_display(
     sensitivity: float = 25.0,
     min_area: int = 5000,
-    display_duration: float = 10.0,
-    audio_file: str = None
+    display_duration: float = 15.0,
+    snapshot_delay: float = 3.0,
+    audio_file: str = None,
+    backend_url: str = None
 ):
     """
-    Run motion-triggered camera display.
+    Run motion-triggered camera display with snapshot upload.
     
     Shows clean camera feed when motion is detected.
-    Uses a SINGLE camera shared between motion detection and display.
+    Uploads a snapshot to the backend 3 seconds after motion.
     
     Args:
         sensitivity: Motion detection sensitivity (lower = more sensitive)
         min_area: Minimum motion area to trigger
-        display_duration: How long to show camera after motion
+        display_duration: How long to show camera after motion (default 15s)
+        snapshot_delay: When to capture snapshot after motion (default 3s)
         audio_file: Path to audio file to play on motion
+        backend_url: Backend URL for uploading snapshots
     """
+    import os
+    import base64
+    import requests
+    
+    backend = backend_url or os.getenv("BACKEND_URL", "http://localhost:8000")
+    
     print("=" * 60)
     print("Motion-Triggered Camera Display")
     print("=" * 60)
@@ -173,7 +183,6 @@ def run_motion_triggered_display(
     print("[Setup] Opening camera...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        # Try camera 1
         cap = cv2.VideoCapture(1)
         if not cap.isOpened():
             print("[ERROR] Could not open camera!")
@@ -185,18 +194,51 @@ def run_motion_triggered_display(
     
     # State variables
     show_until = 0
+    snapshot_at = 0
+    snapshot_taken = False
     prev_frame = None
     motion_count = 0
     audio = audio_file or config.ALERT_AUDIO_FILE
     
-    print(f"[Setup] Audio file: {audio or 'None'}")
+    print(f"[Setup] Backend: {backend}")
     print(f"[Setup] Display duration: {display_duration}s")
-    print(f"[Setup] Sensitivity: {sensitivity}")
+    print(f"[Setup] Snapshot at: {snapshot_delay}s after motion")
+    print(f"[Setup] Audio file: {audio or 'None'}")
     print()
     print("[Ready] Watching for motion... Press 'q' to quit")
     print()
     
     window_open = False
+    
+    def upload_snapshot(frame_data):
+        """Upload snapshot to backend."""
+        try:
+            # Encode frame as JPEG
+            _, jpeg = cv2.imencode('.jpg', frame_data, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            b64_data = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+            
+            # Create event
+            resp = requests.post(f"{backend}/v1/events/start", timeout=10)
+            if resp.status_code != 200:
+                print(f"[Upload] Failed to create event: {resp.status_code}")
+                return
+            
+            event_id = resp.json().get("event_id")
+            print(f"[Upload] Event created: {event_id}")
+            
+            # Upload base64
+            resp = requests.post(
+                f"{backend}/v1/events/{event_id}/upload-base64",
+                json={"image_data": b64_data},
+                headers={"Content-Type": "application/json"},
+                timeout=30
+            )
+            if resp.status_code == 200:
+                print(f"[Upload] Snapshot uploaded successfully!")
+            else:
+                print(f"[Upload] Upload failed: {resp.status_code}")
+        except Exception as e:
+            print(f"[Upload] Error: {e}")
     
     try:
         while True:
@@ -204,6 +246,8 @@ def run_motion_triggered_display(
             if not ret:
                 time.sleep(0.1)
                 continue
+            
+            current_time = time.time()
             
             # Motion detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -218,7 +262,9 @@ def run_motion_triggered_display(
                 for contour in contours:
                     if cv2.contourArea(contour) > min_area:
                         motion_count += 1
-                        show_until = time.time() + display_duration
+                        show_until = current_time + display_duration
+                        snapshot_at = current_time + snapshot_delay
+                        snapshot_taken = False
                         print(f"[Motion #{motion_count}] Detected!")
                         if audio:
                             play_audio(audio)
@@ -226,8 +272,14 @@ def run_motion_triggered_display(
             
             prev_frame = gray
             
+            # Snapshot capture (3 seconds after motion)
+            if not snapshot_taken and snapshot_at > 0 and current_time >= snapshot_at and current_time < show_until:
+                snapshot_taken = True
+                print("[Capture] Taking snapshot...")
+                # Upload in background to avoid blocking
+                threading.Thread(target=upload_snapshot, args=(frame.copy(),), daemon=True).start()
+            
             # Display logic
-            current_time = time.time()
             if current_time < show_until:
                 if not window_open:
                     cv2.namedWindow("Doorbell Camera", cv2.WINDOW_NORMAL)
@@ -237,6 +289,10 @@ def run_motion_triggered_display(
                 h, w = frame.shape[:2]
                 cv2.circle(frame, (w - 80, 30), 8, (0, 0, 255), -1)
                 cv2.putText(frame, "LIVE", (w - 65, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # Show time remaining
+                remaining = int(show_until - current_time)
+                cv2.putText(frame, f"{remaining}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 
                 cv2.imshow("Doorbell Camera", frame)
             else:
@@ -259,9 +315,11 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Motion-triggered camera display")
     parser.add_argument("--audio", type=str, help="Path to audio file to play on motion")
-    parser.add_argument("--duration", type=float, default=10.0, help="Display duration in seconds")
+    parser.add_argument("--duration", type=float, default=15.0, help="Display duration in seconds")
+    parser.add_argument("--snapshot-delay", type=float, default=3.0, help="Seconds after motion to capture snapshot")
     parser.add_argument("--sensitivity", type=float, default=25.0, help="Motion sensitivity (lower = more)")
     parser.add_argument("--min-area", type=int, default=5000, help="Minimum motion area")
+    parser.add_argument("--backend", type=str, help="Backend URL for uploading snapshots")
     
     args = parser.parse_args()
     
@@ -269,5 +327,7 @@ if __name__ == "__main__":
         sensitivity=args.sensitivity,
         min_area=args.min_area,
         display_duration=args.duration,
-        audio_file=args.audio
+        snapshot_delay=args.snapshot_delay,
+        audio_file=args.audio,
+        backend_url=args.backend
     )

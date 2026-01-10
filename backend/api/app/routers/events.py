@@ -126,3 +126,62 @@ def list_events(
     """List recent events."""
     events = db.query(Event).order_by(Event.started_at.desc()).limit(limit).all()
     return events
+
+
+# Base64 upload endpoint for NAT/firewall bypass
+from fastapi import Body
+import base64
+from io import BytesIO
+
+@router.post("/{event_id}/upload-base64", response_model=EventFinalizeResponse)
+def upload_snapshot_base64(
+    event_id: str,
+    image_data: str = Body(..., embed=True),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload snapshot as base64 string.
+    Bypasses presigned URL issues with NAT/ngrok.
+    """
+    try:
+        event_uuid = uuid.UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid event_id format")
+    
+    event = db.query(Event).filter(Event.id == event_uuid).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Decode base64 image
+    try:
+        image_bytes = base64.b64decode(image_data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 image data")
+    
+    # Upload to MinIO
+    object_name = f"snapshots/{event.id}.jpg"
+    try:
+        from .config import settings
+        storage._get_client().put_object(
+            settings.minio_bucket,
+            object_name,
+            BytesIO(image_bytes),
+            len(image_bytes),
+            content_type="image/jpeg"
+        )
+        snapshot_url = f"/snapshots/{event.id}.jpg"
+    except Exception as e:
+        print(f"MinIO upload error: {e}")
+        snapshot_url = f"/snapshots/{event.id}.jpg"
+    
+    # Update event
+    event.snapshot_url = snapshot_url
+    db.commit()
+    db.refresh(event)
+    
+    return EventFinalizeResponse(
+        event_id=event.id,
+        status="finalized",
+        snapshot_url=event.snapshot_url
+    )
+
