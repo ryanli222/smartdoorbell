@@ -209,8 +209,8 @@ def run_motion_triggered_display(
     motion_count = 0
     audio = audio_file or config.ALERT_AUDIO_FILE
     
-    # Audio relay for live mic passthrough
-    audio_relay = AudioRelay()
+    # Audio relay for live mic passthrough - use JVCU100 webcam mic
+    audio_relay = AudioRelay(device="plughw:JVCU100,0")
     
     print(f"[Setup] Backend: {backend}")
     print(f"[Setup] Display duration: {display_duration}s (hard close)")
