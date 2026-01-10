@@ -164,7 +164,20 @@ def run_motion_triggered_display(
     """
     import os
     import base64
-    import requests
+    import signal
+    
+    # Handle Ctrl+C properly
+    running = [True]  # Use list to allow modification in signal handler
+    def signal_handler(sig, frame):
+        print("\n[Ctrl+C] Shutting down...")
+        running[0] = False
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    try:
+        import requests
+    except ImportError:
+        print("[Warning] requests not installed - snapshot upload disabled")
+        requests = None
     
     backend = backend_url or os.getenv("BACKEND_URL", "http://localhost:8000")
     
@@ -251,7 +264,7 @@ def run_motion_triggered_display(
             print(f"[Upload] Error: {e}")
     
     try:
-        while True:
+        while running[0]:
             ret, frame = cap.read()
             if not ret:
                 time.sleep(0.1)
@@ -302,6 +315,8 @@ def run_motion_triggered_display(
                         print(f"[Motion #{motion_count}] Detected! Window opens for {display_duration}s")
                         if audio:
                             play_audio(audio)
+                            # Wait for alert to finish before starting mic relay
+                            time.sleep(5.0)
                         # Start audio relay (mic -> speakers)
                         audio_relay.start()
                         break
