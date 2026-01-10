@@ -161,7 +161,7 @@ def upload_snapshot_base64(
     # Upload to MinIO
     object_name = f"snapshots/{event.id}.jpg"
     try:
-        from .config import settings
+        from ..config import settings
         storage._get_client().put_object(
             settings.minio_bucket,
             object_name,
