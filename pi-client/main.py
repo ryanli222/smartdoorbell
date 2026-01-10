@@ -7,12 +7,11 @@ Detects motion via camera, captures snapshot, uploads to backend.
 import os
 import sys
 import time
-import json
 import uuid
+import cv2
 import requests
 from datetime import datetime
 from doorcam.camera_motion import CameraMotionDetector
-from doorcam.camera_manager import CameraManager
 
 
 # Configuration from environment
@@ -22,23 +21,23 @@ API_KEY = os.getenv("API_KEY", "dev-secret-key-12345")
 
 
 class DoorbellClient:
-    """Main doorbell client that ties everything together."""
+    """Main doorbell client - uses single camera for motion + snapshots."""
     
     def __init__(self):
         self.backend_url = BACKEND_URL
         self.device_id = DEVICE_ID
         self.api_key = API_KEY
-        
-        self.camera = CameraManager()
-        self.detector = CameraMotionDetector(
-            callback=self.on_motion_detected,
-            camera_index=0,
-            sensitivity=25,
-            min_area=5000,
-            cooldown_sec=5.0
-        )
-        
         self.event_count = 0
+        self._detector = None
+    
+    def capture_from_detector(self) -> bytes:
+        """Capture snapshot from the motion detector's camera."""
+        if self._detector and self._detector._cap:
+            ret, frame = self._detector._cap.read()
+            if ret:
+                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                return jpeg.tobytes()
+        return None
     
     def on_motion_detected(self):
         """Called when motion is detected."""
@@ -46,9 +45,9 @@ class DoorbellClient:
         print(f"\n{'='*50}")
         print(f"[Event #{self.event_count}] Motion detected at {datetime.now().isoformat()}")
         
-        # Capture snapshot
+        # Capture snapshot from the same camera
         print("[1/4] Capturing snapshot...")
-        snapshot_data = self.camera.capture_snapshot()
+        snapshot_data = self.capture_from_detector()
         if not snapshot_data:
             print("ERROR: Failed to capture snapshot")
             return
@@ -156,29 +155,30 @@ class DoorbellClient:
         print(f"Device:  {self.device_id}")
         print()
         
-        # Open camera for snapshots
-        if not self.camera.open():
-            print("ERROR: Failed to open camera for snapshots")
-            return
+        # Create detector with our callback
+        self._detector = CameraMotionDetector(
+            callback=self.on_motion_detected,
+            camera_index=0,
+            sensitivity=25,
+            min_area=5000,
+            cooldown_sec=5.0
+        )
         
         print("Starting motion detection...")
         print("Press 'q' in preview window to quit (or Ctrl+C)")
         print()
         
         try:
-            self.detector.start(show_preview=show_preview)
+            self._detector.start(show_preview=show_preview)
         except KeyboardInterrupt:
             print("\nShutting down...")
         finally:
-            self.detector.stop()
-            self.camera.close()
+            self._detector.stop()
             print(f"\nTotal events captured: {self.event_count}")
 
 
 def main():
-    # Check for command line args
     show_preview = "--no-preview" not in sys.argv
-    
     client = DoorbellClient()
     client.run(show_preview=show_preview)
 
