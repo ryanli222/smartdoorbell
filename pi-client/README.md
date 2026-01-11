@@ -1,6 +1,7 @@
 # Smart Door Camera - Pi Client
 
-Motion detection and camera capture modules for the Raspberry Pi edge device.
+Camera-based motion detection and live display for the Raspberry Pi doorbell system.  
+**No external motion sensor required** - uses frame differencing with the USB webcam.
 
 ## Quick Start
 
@@ -11,50 +12,69 @@ cd pi-client
 pip install -r requirements.txt
 ```
 
-### 2. Test Camera Preview
+### 2. Quick Camera Test
 
-Run the camera preview to verify your webcam works:
-
-```bash
-python -m doorcam.camera_manager
-```
-
-**Controls:**
-- Press `q` to quit
-- Press `s` to take a snapshot (saved to current directory)
-
-The preview window shows live FPS and resolution info.
-
-### 3. Test Motion Sensor
-
-Run the motion sensor in mock mode (no hardware required):
+Test that your camera is working:
 
 ```bash
-python -m doorcam.motion_sensor
+python simple_camera_test.py
 ```
 
-**Commands:**
-- Press `Enter` to simulate motion
-- Type `stats` to see detection statistics
-- Type `quit` to exit
+Press `q` to quit.
 
-### 4. Motion-Triggered Live Display ⭐
+### 3. Motion-Triggered Live Display ⭐
 
-Run camera that pops up when motion is detected:
+This is the main application - shows a fullscreen camera feed when motion is detected:
 
 ```bash
 python -m doorcam.live_display
 ```
 
-**With audio alert:**
-```bash
-python -m doorcam.live_display --audio alerts/doorbell.wav
-```
+**What it does:**
+- Monitors camera for motion using frame differencing
+- Shows fullscreen "LIVE" camera view for 15 seconds when motion detected
+- Plays doorbell audio alert
+- Takes snapshot 3 seconds after motion and uploads to backend
+- Relays microphone audio through speakers during active session
 
 **Options:**
-- `--audio <path>` - Audio file to play on motion
-- `--duration <sec>` - How long to show camera (default: 10)
-- `--sensitivity <val>` - Motion sensitivity (lower = more sensitive)
+```bash
+python -m doorcam.live_display --help
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--audio <path>` | `alerts/doorbell.wav` | Audio file to play on motion |
+| `--duration <sec>` | `15` | How long to show camera |
+| `--snapshot-delay <sec>` | `3` | Delay before taking snapshot |
+| `--sensitivity <val>` | `25` | Motion threshold (lower = more sensitive) |
+| `--min-area <px>` | `5000` | Minimum motion area to trigger |
+| `--backend <url>` | `$BACKEND_URL` | Backend URL for snapshot upload |
+
+**Runtime Controls:**
+- Press `q` to quit
+- Press `f` to pause detection for 60 seconds (press again to cancel)
+
+### 4. Test Camera Motion Detection
+
+Test motion detection alone (without upload):
+
+```bash
+python -m doorcam.camera_motion
+```
+
+Shows preview window with motion status and sensitivity stats.  
+Press `q` to quit.
+
+### 5. Test Audio Relay
+
+Test microphone-to-speaker passthrough:
+
+```bash
+python -m doorcam.audio_relay
+```
+
+Press `Ctrl+C` to stop.
 
 ## Configuration
 
@@ -62,29 +82,48 @@ Set environment variables to customize behavior:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MOCK_MODE` | `false` | Enable mock mode (no real GPIO/camera) |
-| `PIR_GPIO_PIN` | `17` | BCM pin number for PIR sensor |
-| `MOTION_DEBOUNCE_MS` | `500` | Hardware debounce time |
-| `MOTION_COOLDOWN_SEC` | `5.0` | Minimum time between triggers |
 | `CAMERA_DEVICE` | `auto` | Camera path or "auto" |
-| `CAMERA_WIDTH` | `1280` | Capture width |
-| `CAMERA_HEIGHT` | `720` | Capture height |
+| `CAMERA_WIDTH` | `1920` | Capture width |
+| `CAMERA_HEIGHT` | `1080` | Capture height |
 | `CAMERA_FPS` | `30` | Target framerate |
-| `ALERT_AUDIO_FILE` | (none) | Audio file to play on motion |
+| `ALERT_AUDIO_FILE` | `alerts/doorbell.wav` | Audio alert on motion |
+| `BACKEND_URL` | `http://localhost:8000` | Backend API URL |
+| `MOCK_MODE` | `false` | Enable mock mode (no camera) |
 
+## Project Structure
+
+```
+pi-client/
+├── doorcam/
+│   ├── live_display.py    # Main entry point - motion triggered display
+│   ├── camera_motion.py   # Camera-based motion detection
+│   ├── camera_manager.py  # Camera handling wrapper
+│   ├── audio.py           # Audio alert playback
+│   ├── audio_relay.py     # Mic-to-speaker passthrough
+│   └── config.py          # Configuration from env vars
+├── alerts/
+│   └── doorbell.wav       # Default doorbell sound
+├── requirements.txt
+└── README.md
+```
 
 ## On Raspberry Pi
 
-Install GPIO support:
+See [DEPLOY_TO_PI.md](DEPLOY_TO_PI.md) for full deployment instructions.
 
+Quick setup:
 ```bash
-pip install RPi.GPIO
-```
+# Install system dependencies
+sudo apt update
+sudo apt install -y python3-opencv portaudio19-dev
 
-Wire the PIR sensor:
-- VCC → 5V
-- GND → GND  
-- OUT → GPIO 17 (or configure with `PIR_GPIO_PIN`)
+# Install Python packages
+pip install -r requirements.txt
+
+# Run
+export BACKEND_URL="https://your-ngrok-url.ngrok-free.app"
+python -m doorcam.live_display
+```
 
 ## Troubleshooting
 
@@ -97,6 +136,20 @@ Wire the PIR sensor:
 - Reduce resolution: `CAMERA_WIDTH=640 CAMERA_HEIGHT=480`
 - Check USB bandwidth (use USB 3.0 port if available)
 
-### Mock mode not working
-- Set `MOCK_MODE=true` explicitly
-- Or run on a non-Pi machine (auto-detected)
+### Audio not playing
+- Ensure audio file exists: `alerts/doorbell.wav`
+- Install an audio backend: `pip install playsound` or `pip install pygame`
+- On Linux: install `aplay` for WAV files
+
+### PyAudio installation issues
+On Windows:
+```bash
+pip install pipwin
+pipwin install pyaudio
+```
+
+On Linux:
+```bash
+sudo apt install portaudio19-dev
+pip install pyaudio
+```
