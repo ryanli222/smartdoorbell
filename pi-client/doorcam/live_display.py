@@ -314,7 +314,7 @@ def run_motion_triggered_display(
                         snapshot_at = current_time + snapshot_delay
                         snapshot_taken = False
                         in_motion_session = True
-                        relay_start_at = current_time + 5.0  # Start mic relay 5s after motion
+                        relay_start_at = current_time + 7.0  # Start mic relay 7s after motion (wait for alert to finish)
                         print(f"[Motion #{motion_count}] Detected! Window opens for {display_duration}s")
                         if audio:
                             play_audio(audio)

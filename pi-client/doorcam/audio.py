@@ -59,12 +59,8 @@ def play_audio(file_path: str = None):
             elif system == "Darwin":  # macOS
                 subprocess.run(["afplay", audio_file], capture_output=True)
             else:  # Linux
-                # Try aplay for WAV files
-                if audio_file.lower().endswith('.wav'):
-                    subprocess.run(["aplay", audio_file], capture_output=True)
-                else:
-                    # Try mpg123 for MP3
-                    subprocess.run(["mpg123", "-q", audio_file], capture_output=True)
+                # Use paplay (PulseAudio) to allow device sharing
+                subprocess.run(["paplay", audio_file], capture_output=True)
                     
         except Exception as e:
             print(f"[Audio] Error playing audio: {e}")

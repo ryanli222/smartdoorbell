@@ -65,10 +65,10 @@ class AudioRelay:
         print(f"[AudioRelay] Starting with device: {device}")
         
         try:
-            # Use arecord piped to aplay for real-time relay
-            # -D = device, -f cd = CD quality, -t raw = raw format
+            # Use PulseAudio parec/paplay for real-time relay (allows device sharing)
+            # parec records from default source, pacat plays to default sink
             self._process = subprocess.Popen(
-                f"arecord -D {device} -f cd -t raw | aplay -f cd -t raw",
+                "parec --latency-msec=50 | pacat --latency-msec=50",
                 shell=True,
                 start_new_session=True
             )
