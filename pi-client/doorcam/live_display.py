@@ -325,6 +325,7 @@ def run_motion_triggered_display(
             # Start audio relay 5s after motion detected
             if in_motion_session and not relay_started and relay_start_at > 0 and current_time >= relay_start_at:
                 relay_started = True
+                print("[Audio] Starting mic relay now...")
                 audio_relay.start()
             
             # Snapshot capture (3 seconds after motion)
