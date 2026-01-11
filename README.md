@@ -1,2 +1,2 @@
 # smartdoorbell
-hooligans ding dong ditched me never again
+Door Camera Utilizing OpenCV for motion detection and capture.
