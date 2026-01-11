@@ -153,8 +153,9 @@ class AudioRelay:
         """Clean up processes."""
         if self._process:
             try:
-                # Use pkill to kill arecord and aplay processes we started
-                subprocess.run(["pkill", "-f", "arecord.*aplay"], capture_output=True)
+                # Kill the PulseAudio parec/pacat processes
+                subprocess.run(["pkill", "-f", "parec"], capture_output=True)
+                subprocess.run(["pkill", "-f", "pacat"], capture_output=True)
             except:
                 pass
             try:
@@ -163,6 +164,7 @@ class AudioRelay:
             except:
                 pass
             self._process = None
+        print("[AudioRelay] Cleaned up")
     
     def start(self):
         """Start audio relay in background thread."""
