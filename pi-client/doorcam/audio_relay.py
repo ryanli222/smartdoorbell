@@ -155,15 +155,15 @@ class AudioRelay:
         """Clean up processes."""
         if self._process:
             try:
-                # Kill the process group to get pipe children too
-                import os
-                import signal
-                os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+                # Use pkill to kill arecord and aplay processes we started
+                subprocess.run(["pkill", "-f", "arecord.*aplay"], capture_output=True)
             except:
-                try:
-                    self._process.kill()
-                except:
-                    pass
+                pass
+            try:
+                self._process.kill()
+                self._process.wait(timeout=1)
+            except:
+                pass
             self._process = None
     
     def start(self):
