@@ -68,11 +68,9 @@ class AudioRelay:
             # Use arecord piped to aplay for real-time relay
             # -D = device, -f cd = CD quality, -t raw = raw format
             self._process = subprocess.Popen(
-                f"arecord -D {device} -f cd -t raw 2>/dev/null | aplay -f cd -t raw 2>/dev/null",
+                f"arecord -D {device} -f cd -t raw | aplay -f cd -t raw",
                 shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True  # Create new process group for proper cleanup
+                start_new_session=True
             )
             
             print("[AudioRelay] Started - mic → speakers")
