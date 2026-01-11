@@ -71,7 +71,8 @@ class AudioRelay:
                 f"arecord -D {device} -f cd -t raw 2>/dev/null | aplay -f cd -t raw 2>/dev/null",
                 shell=True,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                start_new_session=True  # Create new process group for proper cleanup
             )
             
             print("[AudioRelay] Started - mic → speakers")
@@ -154,8 +155,10 @@ class AudioRelay:
         """Clean up processes."""
         if self._process:
             try:
-                self._process.terminate()
-                self._process.wait(timeout=1)
+                # Kill the process group to get pipe children too
+                import os
+                import signal
+                os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
             except:
                 try:
                     self._process.kill()

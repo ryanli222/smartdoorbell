@@ -208,6 +208,8 @@ def run_motion_triggered_display(
     prev_frame = None
     motion_count = 0
     audio = audio_file or config.ALERT_AUDIO_FILE
+    relay_start_at = 0  # When to start audio relay
+    relay_started = False  # Track if relay is running
     
     # Audio relay for live mic passthrough - use JVCU100 webcam mic
     audio_relay = AudioRelay(device="plughw:JVCU100,0")
@@ -312,17 +314,18 @@ def run_motion_triggered_display(
                         snapshot_at = current_time + snapshot_delay
                         snapshot_taken = False
                         in_motion_session = True
+                        relay_start_at = current_time + 5.0  # Start mic relay 5s after motion
                         print(f"[Motion #{motion_count}] Detected! Window opens for {display_duration}s")
                         if audio:
                             play_audio(audio)
-                        # Start audio relay after 5s delay (in background so camera doesn't freeze)
-                        def start_relay_delayed():
-                            time.sleep(5.0)
-                            audio_relay.start()
-                        threading.Thread(target=start_relay_delayed, daemon=True).start()
                         break
             
             prev_frame = gray
+            
+            # Start audio relay 5s after motion detected
+            if in_motion_session and not relay_started and relay_start_at > 0 and current_time >= relay_start_at:
+                relay_started = True
+                audio_relay.start()
             
             # Snapshot capture (3 seconds after motion)
             if in_motion_session and not snapshot_taken and current_time >= snapshot_at:
@@ -355,6 +358,8 @@ def run_motion_triggered_display(
                     print(f"[Session] Window closed after {display_duration}s")
                 # Stop audio relay
                 audio_relay.stop()
+                relay_started = False
+                relay_start_at = 0
                 in_motion_session = False
                 motion_start_time = 0
             
