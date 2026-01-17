@@ -1,73 +1,100 @@
 """
-Gesture Detector Module
+Gesture Detector Module (OpenCV-only version)
 
-Detects hand gestures using MediaPipe.
-Currently supports: Peace sign (✌️)
+Detects hand gestures using skin color detection and contour analysis.
+Works on Raspberry Pi without MediaPipe.
+
+Currently supports: Peace sign (✌️) - detected as 2 extended fingers
 """
 
+import cv2
+import numpy as np
 import time
-from typing import Optional, Tuple
-
-try:
-    import mediapipe as mp
-    MEDIAPIPE_AVAILABLE = True
-except ImportError:
-    MEDIAPIPE_AVAILABLE = False
-    print("[GestureDetector] MediaPipe not installed - gesture detection disabled")
+from typing import Tuple, Optional
 
 
 class GestureDetector:
     """
-    Detects hand gestures using MediaPipe Hands.
+    Detects hand gestures using OpenCV skin color detection.
+    
+    This is a simpler approach that works on Raspberry Pi 5
+    without requiring MediaPipe.
     
     Currently supports:
-    - Peace sign (index + middle fingers extended, others folded)
+    - Peace sign (2 extended fingers detected)
     """
     
     def __init__(
         self,
         cooldown_sec: float = 5.0,
-        min_detection_confidence: float = 0.7,
-        min_tracking_confidence: float = 0.5
+        min_hand_area: int = 5000
     ):
         """
         Initialize gesture detector.
         
         Args:
             cooldown_sec: Seconds to wait before triggering same gesture again
-            min_detection_confidence: MediaPipe detection confidence threshold
-            min_tracking_confidence: MediaPipe tracking confidence threshold
+            min_hand_area: Minimum contour area to consider as a hand
         """
         self.cooldown_sec = cooldown_sec
+        self.min_hand_area = min_hand_area
         self._last_peace_sign_time = 0
-        self._hands = None
         
-        if MEDIAPIPE_AVAILABLE:
-            self._mp_hands = mp.solutions.hands
-            self._hands = self._mp_hands.Hands(
-                static_image_mode=False,
-                max_num_hands=2,
-                min_detection_confidence=min_detection_confidence,
-                min_tracking_confidence=min_tracking_confidence
-            )
-            self._mp_draw = mp.solutions.drawing_utils
-            print("[GestureDetector] Initialized with MediaPipe Hands")
+        # Skin color range in HSV (adjust if needed for different skin tones)
+        self.lower_skin = np.array([0, 20, 70], dtype=np.uint8)
+        self.upper_skin = np.array([20, 255, 255], dtype=np.uint8)
+        
+        print("[GestureDetector] Initialized with OpenCV skin detection")
     
-    def _is_finger_extended(self, landmarks, finger_tip_idx: int, finger_pip_idx: int) -> bool:
-        """Check if a finger is extended based on tip vs PIP joint position."""
-        tip = landmarks[finger_tip_idx]
-        pip = landmarks[finger_pip_idx]
-        # Finger is extended if tip is above (lower y value) the PIP joint
-        return tip.y < pip.y
+    def _count_fingers(self, contour, frame_shape) -> Tuple[int, list]:
+        """
+        Count extended fingers using convex hull defects.
+        
+        Returns:
+            Tuple of (finger_count, defect_points for drawing)
+        """
+        # Get convex hull
+        hull = cv2.convexHull(contour, returnPoints=False)
+        
+        if len(hull) < 3:
+            return 0, []
+        
+        try:
+            defects = cv2.convexityDefects(contour, hull)
+        except:
+            return 0, []
+        
+        if defects is None:
+            return 0, []
+        
+        finger_count = 0
+        defect_points = []
+        
+        for i in range(defects.shape[0]):
+            s, e, f, d = defects[i, 0]
+            start = tuple(contour[s][0])
+            end = tuple(contour[e][0])
+            far = tuple(contour[f][0])
+            
+            # Calculate the angle between fingers
+            a = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
+            b = np.sqrt((far[0] - start[0])**2 + (far[1] - start[1])**2)
+            c = np.sqrt((end[0] - far[0])**2 + (end[1] - far[1])**2)
+            
+            # Cosine rule to find angle
+            if b * c == 0:
+                continue
+            angle = np.arccos((b**2 + c**2 - a**2) / (2 * b * c))
+            
+            # If angle is less than 90 degrees, it's a finger gap
+            if angle <= np.pi / 2:
+                finger_count += 1
+                defect_points.append(far)
+        
+        # finger_count is the number of gaps, so fingers = gaps + 1
+        return finger_count + 1, defect_points
     
-    def _is_finger_folded(self, landmarks, finger_tip_idx: int, finger_mcp_idx: int) -> bool:
-        """Check if a finger is folded (curled down)."""
-        tip = landmarks[finger_tip_idx]
-        mcp = landmarks[finger_mcp_idx]
-        # Finger is folded if tip is below (higher y value) the MCP joint
-        return tip.y > mcp.y
-    
-    def detect_peace_sign(self, frame) -> Tuple[bool, Optional[object]]:
+    def detect_peace_sign(self, frame) -> Tuple[bool, Optional[np.ndarray]]:
         """
         Detect peace sign gesture in the frame.
         
@@ -75,77 +102,79 @@ class GestureDetector:
             frame: BGR image from OpenCV
             
         Returns:
-            Tuple of (detected: bool, hand_landmarks for drawing or None)
+            Tuple of (detected: bool, mask for visualization or None)
         """
-        if not MEDIAPIPE_AVAILABLE or self._hands is None:
-            return False, None
-        
         # Check cooldown
         current_time = time.time()
         if current_time - self._last_peace_sign_time < self.cooldown_sec:
             return False, None
         
-        # Convert BGR to RGB for MediaPipe
-        import cv2
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self._hands.process(rgb_frame)
+        # Convert to HSV for skin detection
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
-        if not results.multi_hand_landmarks:
-            return False, None
+        # Create skin mask
+        mask = cv2.inRange(hsv, self.lower_skin, self.upper_skin)
         
-        # Check each detected hand
-        for hand_landmarks in results.multi_hand_landmarks:
-            landmarks = hand_landmarks.landmark
-            
-            # MediaPipe hand landmark indices:
-            # Index finger: TIP=8, PIP=6, MCP=5
-            # Middle finger: TIP=12, PIP=10, MCP=9
-            # Ring finger: TIP=16, PIP=14, MCP=13
-            # Pinky: TIP=20, PIP=18, MCP=17
-            # Thumb: TIP=4, IP=3, MCP=2
-            
-            # Peace sign: Index and Middle extended, Ring and Pinky folded
-            index_extended = self._is_finger_extended(landmarks, 8, 6)
-            middle_extended = self._is_finger_extended(landmarks, 12, 10)
-            ring_folded = self._is_finger_folded(landmarks, 16, 13)
-            pinky_folded = self._is_finger_folded(landmarks, 20, 17)
-            
-            if index_extended and middle_extended and ring_folded and pinky_folded:
-                self._last_peace_sign_time = current_time
-                return True, hand_landmarks
+        # Clean up the mask
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        mask = cv2.erode(mask, kernel, iterations=2)
+        mask = cv2.dilate(mask, kernel, iterations=2)
+        mask = cv2.GaussianBlur(mask, (3, 3), 0)
         
-        return False, None
+        # Find contours
+        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return False, mask
+        
+        # Find the largest contour (presumably the hand)
+        max_contour = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(max_contour)
+        
+        if area < self.min_hand_area:
+            return False, mask
+        
+        # Count fingers
+        finger_count, _ = self._count_fingers(max_contour, frame.shape)
+        
+        # Peace sign = 2 fingers extended
+        if finger_count == 2:
+            self._last_peace_sign_time = current_time
+            return True, mask
+        
+        return False, mask
     
-    def draw_landmarks(self, frame, hand_landmarks):
-        """Draw hand landmarks on the frame."""
-        if MEDIAPIPE_AVAILABLE and hand_landmarks:
-            self._mp_draw.draw_landmarks(
-                frame, 
-                hand_landmarks, 
-                self._mp_hands.HAND_CONNECTIONS
-            )
+    def draw_landmarks(self, frame, mask):
+        """Draw detection visualization on the frame."""
+        if mask is not None:
+            # Find contours on the mask
+            contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                max_contour = max(contours, key=cv2.contourArea)
+                if cv2.contourArea(max_contour) > self.min_hand_area:
+                    # Draw the hand contour
+                    cv2.drawContours(frame, [max_contour], -1, (0, 255, 0), 2)
+                    # Draw convex hull
+                    hull = cv2.convexHull(max_contour)
+                    cv2.drawContours(frame, [hull], -1, (255, 0, 0), 2)
         return frame
     
     def close(self):
-        """Release resources."""
-        if self._hands:
-            self._hands.close()
-            self._hands = None
+        """Release resources (no-op for OpenCV version)."""
+        pass
 
 
 # Test script
 if __name__ == "__main__":
-    import cv2
-    
     print("=" * 50)
-    print("Gesture Detector Test")
+    print("Gesture Detector Test (OpenCV version)")
     print("=" * 50)
     print()
-    
-    if not MEDIAPIPE_AVAILABLE:
-        print("ERROR: MediaPipe not installed!")
-        print("Install with: pip install mediapipe")
-        exit(1)
+    print("This uses skin color detection - works best with:")
+    print("- Good lighting")
+    print("- Plain background")
+    print("- Hand clearly visible")
+    print()
     
     detector = GestureDetector(cooldown_sec=2.0)
     
@@ -154,11 +183,12 @@ if __name__ == "__main__":
         print("ERROR: Could not open camera!")
         exit(1)
     
-    print("Camera opened. Show a peace sign ✌️ to test!")
-    print("Press 'q' to quit.")
+    print("Camera opened. Show a peace sign ✌️ (2 fingers) to test!")
+    print("Press 'q' to quit, 'd' to toggle debug view.")
     print()
     
     peace_count = 0
+    show_debug = False
     
     try:
         while True:
@@ -166,26 +196,38 @@ if __name__ == "__main__":
             if not ret:
                 continue
             
+            # Flip for mirror effect
+            frame = cv2.flip(frame, 1)
+            
             # Detect peace sign
-            detected, landmarks = detector.detect_peace_sign(frame)
+            detected, mask = detector.detect_peace_sign(frame)
             
             if detected:
                 peace_count += 1
                 print(f"[{peace_count}] Peace sign detected! ✌️")
             
-            # Draw landmarks if detected
-            if landmarks:
-                detector.draw_landmarks(frame, landmarks)
+            # Draw visualization
+            detector.draw_landmarks(frame, mask)
             
             # Show status
-            status = "PEACE SIGN!" if detected else "Watching..."
+            status = "PEACE SIGN!" if detected else "Show 2 fingers..."
             color = (0, 255, 0) if detected else (255, 255, 255)
             cv2.putText(frame, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
             
+            # Show main view
             cv2.imshow("Gesture Detector Test", frame)
             
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            # Show debug mask if enabled
+            if show_debug and mask is not None:
+                cv2.imshow("Skin Mask (Debug)", mask)
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
                 break
+            elif key == ord('d'):
+                show_debug = not show_debug
+                if not show_debug:
+                    cv2.destroyWindow("Skin Mask (Debug)")
     
     finally:
         detector.close()
