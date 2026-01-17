@@ -4,7 +4,7 @@ Audio Player Module
 Plays alert sounds when motion is detected.
 Supports WAV, MP3, and other common audio formats.
 """
-
+#imports
 import os
 import threading
 from pathlib import Path
