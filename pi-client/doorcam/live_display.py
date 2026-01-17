@@ -14,6 +14,7 @@ from .camera_manager import CameraManager
 from .camera_motion import CameraMotionDetector
 from .audio import play_audio
 from .audio_relay import AudioRelay
+from .gesture_detector import GestureDetector
 
 
 class LiveCameraDisplay:
@@ -214,6 +215,11 @@ def run_motion_triggered_display(
     # Audio relay for live mic passthrough - use JVCU100 webcam mic
     audio_relay = AudioRelay(device="plughw:JVCU100,0")
     
+    # Gesture detection for peace sign
+    gesture_detector = GestureDetector(cooldown_sec=5.0)
+    friend_audio = "alerts/friend1.wav"  # Audio to play on peace sign
+    peace_sign_count = 0
+    
     print(f"[Setup] Backend: {backend}")
     print(f"[Setup] Display duration: {display_duration}s (hard close)")
     print(f"[Setup] Snapshot at: {snapshot_delay}s after motion")
@@ -322,6 +328,16 @@ def run_motion_triggered_display(
             
             prev_frame = gray
             
+            # Gesture detection - check for peace sign
+            if in_motion_session:
+                peace_detected, hand_landmarks = gesture_detector.detect_peace_sign(frame)
+                if peace_detected:
+                    peace_sign_count += 1
+                    print(f"[Gesture #{peace_sign_count}] Peace sign detected! ✌️ Playing friend audio...")
+                    play_audio(friend_audio)
+                    # Draw hand landmarks
+                    gesture_detector.draw_landmarks(frame, hand_landmarks)
+            
             # Start audio relay 5s after motion detected
             if in_motion_session and not relay_started and relay_start_at > 0 and current_time >= relay_start_at:
                 relay_started = True
@@ -376,9 +392,11 @@ def run_motion_triggered_display(
     
     finally:
         audio_relay.stop()  # Stop audio relay if running
+        gesture_detector.close()  # Release gesture detector resources
         cap.release()
         cv2.destroyAllWindows()
         print(f"\n[Done] Total motion events: {motion_count}")
+        print(f"[Done] Total peace signs detected: {peace_sign_count}")
 
 
 if __name__ == "__main__":
