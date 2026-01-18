@@ -151,7 +151,7 @@ class LiveCameraDisplay:
 def run_motion_triggered_display(
     sensitivity: float = 25.0,
     min_area: int = 5000,
-    display_duration: float = 15.0,
+    display_duration: float = 60.0,
     snapshot_delay: float = 3.0,
     audio_file: str = None,
     backend_url: str = None
@@ -215,10 +215,9 @@ def run_motion_triggered_display(
     # Audio relay for live mic passthrough - use JVCU100 webcam mic
     audio_relay = AudioRelay(device="plughw:JVCU100,0")
     
-    # Gesture detection for peace sign
-    gesture_detector = GestureDetector(cooldown_sec=5.0)
-    friend_audio = "alerts/friend1.wav"  # Audio to play on peace sign
-    peace_sign_count = 0
+    # Gesture detection - uses detect_gesture() which handles all gestures and plays sounds
+    gesture_detector = GestureDetector(cooldown_sec=15.0)
+    gesture_counts = {"peace": 0, "three": 0, "middle": 0}
     
     print(f"[Setup] Backend: {backend}")
     print(f"[Setup] Display duration: {display_duration}s (hard close)")
@@ -328,15 +327,20 @@ def run_motion_triggered_display(
             
             prev_frame = gray
             
-            # Gesture detection - check for peace sign
+            # Gesture detection - check for all gestures (peace, three fingers, middle)
+            # detect_gesture() automatically plays the associated sound file
             if in_motion_session:
-                peace_detected, hand_landmarks = gesture_detector.detect_peace_sign(frame)
-                if peace_detected:
-                    peace_sign_count += 1
-                    print(f"[Gesture #{peace_sign_count}] Peace sign detected! ✌️ Playing friend audio...")
-                    play_audio(friend_audio)
-                    # Draw hand landmarks
-                    gesture_detector.draw_landmarks(frame, hand_landmarks)
+                gesture, hand_landmarks = gesture_detector.detect_gesture(frame)
+                if gesture:
+                    gesture_counts[gesture] += 1
+                    emoji = {"peace": "✌️", "three": "🤟", "middle": "🖕"}.get(gesture, "")
+                    name = {"peace": "FRIEND (John)", "three": "THREE (Gerbert)", "middle": "ENEMY!"}.get(gesture, gesture)
+                    print(f"[Gesture #{sum(gesture_counts.values())}] {name} {emoji}")
+                
+                # Always draw hand wireframe if visible
+                hand_data = gesture_detector.get_hand_landmarks(frame)
+                for hd in hand_data:
+                    gesture_detector.draw_landmarks(frame, hd)
             
             # Start audio relay 5s after motion detected
             if in_motion_session and not relay_started and relay_start_at > 0 and current_time >= relay_start_at:
@@ -396,7 +400,7 @@ def run_motion_triggered_display(
         cap.release()
         cv2.destroyAllWindows()
         print(f"\n[Done] Total motion events: {motion_count}")
-        print(f"[Done] Total peace signs detected: {peace_sign_count}")
+        print(f"[Done] Gesture counts: {gesture_counts}")
 
 
 if __name__ == "__main__":
@@ -404,7 +408,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Motion-triggered camera display")
     parser.add_argument("--audio", type=str, help="Path to audio file to play on motion")
-    parser.add_argument("--duration", type=float, default=15.0, help="Display duration in seconds")
+    parser.add_argument("--duration", type=float, default=60.0, help="Display duration in seconds")
     parser.add_argument("--snapshot-delay", type=float, default=3.0, help="Seconds after motion to capture snapshot")
     parser.add_argument("--sensitivity", type=float, default=25.0, help="Motion sensitivity (lower = more)")
     parser.add_argument("--min-area", type=int, default=5000, help="Minimum motion area")
